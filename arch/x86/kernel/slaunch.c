@@ -466,39 +466,37 @@ void __init slaunch_setup(void)
 		slaunch_setup_intel();
 }
 
-#define MSG_BUFFER_LEN 20
 #define SL_FS_ENTRIES		10
 #define SL_ROOT_DIR_ENTRY	SL_FS_ENTRIES - 1 /* root directory node must be last */
 #define SL_TXT_DIR_ENTRY	SL_FS_ENTRIES - 2 
 #define SL_TXT_ENTRY_COUNT 		7
 
-#define DECLARE_TXT_PUB_READ_U(size, fmt) 							\
-static long txt_pub_read_u##size(unsigned int offset, char* buf) {				\
+#define DECLARE_TXT_PUB_READ_U(size, fmt, msg_size)						\
+static ssize_t txt_pub_read_u##size(unsigned int offset, loff_t* read_offset,			\
+		size_t read_len, char __user *buf) {						\
 	void __iomem *txt;									\
+	char msg_buffer[msg_size];								\
 	u##size reg_value = 0;									\
 	txt = ioremap(TXT_PUB_CONFIG_REGS_BASE, TXT_NR_CONFIG_PAGES * PAGE_SIZE);		\
-	if(IS_ERR(txt)) {									\
+	if(IS_ERR(txt))										\
 		return PTR_ERR(txt);								\
-	}											\
 	memcpy_fromio(&reg_value, txt + offset, sizeof(u##size));				\
 	iounmap(txt);										\
-	snprintf(buf, MSG_BUFFER_LEN, fmt, reg_value);						\
-	return 0;										\
+	snprintf(msg_buffer, msg_size, fmt, reg_value);						\
+	return simple_read_from_buffer(buf, read_len, read_offset, &msg_buffer, msg_size);	\
 }
 
-DECLARE_TXT_PUB_READ_U(8, "%#04x\n");
-DECLARE_TXT_PUB_READ_U(32, "%#010x\n");
-DECLARE_TXT_PUB_READ_U(64, "%#018llx\n");
+DECLARE_TXT_PUB_READ_U(8, "%#04x\n", 6);
+DECLARE_TXT_PUB_READ_U(32, "%#010x\n", 12);
+DECLARE_TXT_PUB_READ_U(64, "%#018llx\n", 20);
 
-#define DECLARE_TXT_FOPS(reg_name, reg_offset, reg_size)                                        \
-static ssize_t txt_##reg_name##_read(struct file *flip, char __user *buffer,                    \
-                size_t len, loff_t *offset) {                                                   \
-        char msg_buffer[MSG_BUFFER_LEN];                                                        \
-        txt_pub_read_u##reg_size(reg_offset, msg_buffer);                                 \
-        return simple_read_from_buffer(buffer, len, offset, &msg_buffer, MSG_BUFFER_LEN);       \
-}                                                                                               \
-static const struct file_operations reg_name##_ops = {                                          \
-        .read = txt_##reg_name##_read,                                                          \
+#define DECLARE_TXT_FOPS(reg_name, reg_offset, reg_size)					\
+static ssize_t txt_##reg_name##_read(struct file *flip, char __user *buf,			\
+		size_t read_len, loff_t *read_offset) {						\
+	return txt_pub_read_u##reg_size(reg_offset, read_offset, read_len, buf);		\
+}												\
+static const struct file_operations reg_name##_ops = {						\
+	.read = txt_##reg_name##_read,								\
 };
 
 DECLARE_TXT_FOPS(sts,TXT_CR_STS,64);
@@ -630,7 +628,6 @@ static long slaunch_expose_securityfs(void)
 	
 		for(i = 0; i < SL_TXT_ENTRY_COUNT; i++) {
 			ret = sl_create_file(SL_TXT_DIR_ENTRY - 1 - i, sl_files[i].parent, sl_files[i].name, sl_files[i].fops);
-			pr_err("Error creating file %s\n", sl_files[i].name);
 			if (ret)
 				goto err_dir;
 		}
